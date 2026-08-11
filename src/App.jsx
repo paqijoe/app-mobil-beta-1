@@ -1,6 +1,26 @@
-// @ts-nocheck
 import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getFirestore, collection, addDoc, updateDoc, doc, onSnapshot, query, orderBy } from 'firebase/firestore';
 
+// ==========================================
+// KODE FIREBASE CONFIG ANDA
+// ==========================================
+const firebaseConfig = {
+  apiKey: "AIzaSyCd39zwp6CPs5XkAvJYnPcVfGMl1ooiO4U",
+  authDomain: "mobil-yayasan-beta.firebaseapp.com",
+  projectId: "mobil-yayasan-beta",
+  storageBucket: "mobil-yayasan-beta.firebasestorage.app",
+  messagingSenderId: "68419943952",
+  appId: "1:68419943952:web:b23fea3c09c082d5941495"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// ==========================================
+// ICON COMPONENTS
+// ==========================================
 const CarIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a2 2 0 0 0-1.6-.8H8.3a2 2 0 0 0-1.6.8L4 11l-5.16.86a1 1 0 0 0-.84.99V16h3m10 0a2 2 0 1 1-4 0m4 0a2 2 0 1 0-4 0m-10 0a2 2 0 1 1-4 0m4 0a2 2 0 1 0-4 0"/></svg>
 );
@@ -25,24 +45,6 @@ const AlertIcon = () => (
 const EditIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
 );
-
-const initialCars = [
-  { 
-    id: 1, 
-    name: 'Daihatsu Luxio', 
-    plate: 'BE 1234 YAY', 
-    capacity: 8, 
-    status: 'Tersedia',
-    currentKm: 126500, 
-    lastOilChangeKm: 120000, 
-    lastOilChangeDate: '2025-10-15', 
-    lastOilBrand: 'Pertamina Fastron 10W-40',
-    oilChangeLimitKm: 5000, 
-    oilChangeLimitMonths: 6 
-  },
-];
-
-const initialRequests = [];
 
 const OPT_PENUMPANG = [
   "Yayasan - Pengurus", "Yayasan - Staff", "Guru/Staff/Murid - SMPIT", 
@@ -115,9 +117,13 @@ const checkMaintenanceStatus = (car) => {
 
 export default function App() {
   const [role, setRole] = useState(null);
-  const [cars, setCars] = useState(initialCars);
-  const [requests, setRequests] = useState(initialRequests);
+  
+  // STATE TERHUBUNG KE FIREBASE
+  const [cars, setCars] = useState([]);
+  const [requests, setRequests] = useState([]);
+  
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [isLoading, setIsLoading] = useState(true); // Loading indicator
 
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
@@ -151,6 +157,43 @@ export default function App() {
     name: '', plate: '', capacity: 8, currentKm: 0, status: 'Beroperasi'
   });
 
+  // ==========================================
+  // MENGAMBIL DATA DARI FIREBASE (REALTIME)
+  // ==========================================
+  useEffect(() => {
+    // Listener untuk koleksi 'cars'
+    const qCars = query(collection(db, 'cars'));
+    const unsubscribeCars = onSnapshot(qCars, (querySnapshot) => {
+      const carsData = [];
+      querySnapshot.forEach((doc) => {
+        carsData.push({ id: doc.id, ...doc.data() });
+      });
+      setCars(carsData);
+      setIsLoading(false); // Matikan loading setelah data pertama masuk
+    }, (error) => {
+        console.error("Error fetching cars: ", error);
+        setIsLoading(false);
+    });
+
+    // Listener untuk koleksi 'requests' (Jadwal/Riwayat)
+    const qReqs = query(collection(db, 'requests'), orderBy('createdAt', 'desc'));
+    const unsubscribeReqs = onSnapshot(qReqs, (querySnapshot) => {
+      const reqsData = [];
+      querySnapshot.forEach((doc) => {
+        reqsData.push({ id: doc.id, ...doc.data() });
+      });
+      setRequests(reqsData);
+    }, (error) => {
+       console.error("Error fetching requests: ", error);
+    });
+
+    // Cleanup saat komponen dibongkar
+    return () => {
+      unsubscribeCars();
+      unsubscribeReqs();
+    };
+  }, []);
+
   const handleLogin = (selectedRole) => {
     setRole(selectedRole);
     setActiveTab(selectedRole === 'admin' ? 'maintenance' : 'available-cars');
@@ -158,27 +201,35 @@ export default function App() {
 
   const handleLogout = () => setRole(null);
 
-  const handleSubmitRequest = (e) => {
+  // ==========================================
+  // MENYIMPAN DATA KE FIREBASE
+  // ==========================================
+
+  const handleSubmitRequest = async (e) => {
     e.preventDefault();
     const finalLokasiAmbil = newReq.lokasiAmbil === 'Lainnya' ? newReq.lokasiAmbilLainnya : newReq.lokasiAmbil;
     
-    const request = {
-      id: Date.now(),
-      carId: selectedCar.id,
-      carName: selectedCar.name,
-      status: 'Booking',
-      reqData: { ...newReq, lokasiAmbil: finalLokasiAmbil }, 
-      reportData: null 
-    };
-    
-    setRequests([request, ...requests]);
-    setNewReq({ 
-      pengaju: '', driver: '', tujuan: '', alamat: '', 
-      penumpang: OPT_PENUMPANG[0], tglMulai: '', bensinAwal: '8', 
-      lokasiAmbil: OPT_LOKASI[0], lokasiAmbilLainnya: '' 
-    });
-    setShowRequestModal(false);
-    setActiveTab('my-requests');
+    try {
+        await addDoc(collection(db, 'requests'), {
+            carId: selectedCar.id,
+            carName: selectedCar.name,
+            status: 'Booking',
+            reqData: { ...newReq, lokasiAmbil: finalLokasiAmbil },
+            reportData: null,
+            createdAt: new Date().toISOString() // Untuk sorting terbaru
+        });
+        
+        setNewReq({ 
+            pengaju: '', driver: '', tujuan: '', alamat: '', 
+            penumpang: OPT_PENUMPANG[0], tglMulai: '', bensinAwal: '8', 
+            lokasiAmbil: OPT_LOKASI[0], lokasiAmbilLainnya: '' 
+        });
+        setShowRequestModal(false);
+        setActiveTab('my-requests');
+    } catch (e) {
+        console.error("Error adding document: ", e);
+        alert("Gagal menyimpan booking. Pastikan aturan Firebase (Rules) sudah benar.");
+    }
   };
 
   const openReportModal = (req) => {
@@ -186,7 +237,7 @@ export default function App() {
     setShowReportModal(true);
   };
 
-  const handleSubmitReport = (e) => {
+  const handleSubmitReport = async (e) => {
     e.preventDefault();
     
     const finalLokasiKembali = newReport.lokasiKembali === 'Lainnya' ? newReport.lokasiKembaliLainnya : newReport.lokasiKembali;
@@ -201,47 +252,59 @@ export default function App() {
         detailKerusakan: finalKerusakan
     };
 
-    setRequests(requests.map(req => 
-      req.id === activeRequest.id 
-        ? { ...req, status: 'Selesai', reportData: processedReport } 
-        : req
-    ));
+    try {
+        // 1. Update status request di Firebase
+        const reqRef = doc(db, 'requests', activeRequest.id);
+        await updateDoc(reqRef, {
+            status: 'Selesai',
+            reportData: processedReport
+        });
 
-    const reportedKm = parseInt(newReport.kilometer, 10);
-    if (!isNaN(reportedKm)) {
-      setCars(cars.map(c => 
-        c.id === activeRequest.carId
-          ? { ...c, currentKm: Math.max(c.currentKm, reportedKm) }
-          : c
-      ));
+        // 2. Update KM Mobil (Jika KM lebih tinggi)
+        const reportedKm = parseInt(newReport.kilometer, 10);
+        if (!isNaN(reportedKm)) {
+            const carToUpdate = cars.find(c => c.id === activeRequest.carId);
+            if (carToUpdate && reportedKm > carToUpdate.currentKm) {
+                const carRef = doc(db, 'cars', activeRequest.carId);
+                await updateDoc(carRef, {
+                    currentKm: reportedKm
+                });
+            }
+        }
+        
+        setShowReportModal(false);
+        setActiveRequest(null);
+        setNewReport({
+            tglSelesai: '', adaKerusakan: 'Tidak', jenisKerusakan: OPT_KERUSAKAN[0], kerusakanLainnya: '',
+            isiBensin: 'Tidak', bensinAkhir: '8', kilometer: '',
+            lokasiKembali: OPT_LOKASI[0], lokasiKembaliLainnya: '',
+            interiorDibersihkan: 'Sudah', barangTertinggal: '-', kondisiKebersihan: 'Bersih'
+        });
+    } catch (e) {
+        console.error("Error updating report: ", e);
+        alert("Gagal menyimpan laporan.");
     }
-    
-    setShowReportModal(false);
-    setActiveRequest(null);
-    setNewReport({
-      tglSelesai: '', adaKerusakan: 'Tidak', jenisKerusakan: OPT_KERUSAKAN[0], kerusakanLainnya: '',
-      isiBensin: 'Tidak', bensinAkhir: '8', kilometer: '',
-      lokasiKembali: OPT_LOKASI[0], lokasiKembaliLainnya: '',
-      interiorDibersihkan: 'Sudah', barangTertinggal: '-', kondisiKebersihan: 'Bersih'
-    });
   };
 
-  const handleUpdateOil = (e) => {
+  const handleUpdateOil = async (e) => {
     e.preventDefault();
-    setCars(cars.map(c => 
-      c.id === selectedCar.id
-        ? { 
-            ...c, 
-            lastOilChangeKm: parseInt(newOilData.km, 10), 
+    try {
+        const carRef = doc(db, 'cars', selectedCar.id);
+        const newKm = parseInt(newOilData.km, 10);
+        
+        await updateDoc(carRef, {
+            lastOilChangeKm: newKm,
             lastOilChangeDate: newOilData.date,
-            currentKm: Math.max(c.currentKm, parseInt(newOilData.km, 10)),
+            currentKm: Math.max(selectedCar.currentKm || 0, newKm), // Pastikan KM saat ini jg naik
             lastOilBrand: newOilData.brand,
             oilChangeLimitKm: parseInt(newOilData.limitKm, 10),
             oilChangeLimitMonths: parseInt(newOilData.limitMonths, 10)
-          }
-        : c
-    ));
-    setShowOilModal(false);
+        });
+        setShowOilModal(false);
+    } catch (e) {
+        console.error("Error updating oil: ", e);
+        alert("Gagal menyimpan data ganti oli.");
+    }
   };
 
   const openAddCarModal = () => {
@@ -259,31 +322,56 @@ export default function App() {
     setShowCarModal(true);
   };
 
-  const handleSaveCar = (e) => {
+  const handleSaveCar = async (e) => {
     e.preventDefault();
     const kmParsed = parseInt(carFormData.currentKm, 10) || 0;
     const capacityParsed = parseInt(carFormData.capacity, 10) || 1;
 
-    if (editingCar) {
-      setCars(cars.map(c => c.id === editingCar.id ? { 
-        ...c, ...carFormData, currentKm: kmParsed, capacity: capacityParsed 
-      } : c));
-    } else {
-      const newCar = {
-        ...carFormData,
-        id: Date.now(), currentKm: kmParsed, capacity: capacityParsed,
-        lastOilChangeKm: kmParsed, lastOilChangeDate: new Date().toISOString().split('T')[0],
-        lastOilBrand: '-', oilChangeLimitKm: 5000, oilChangeLimitMonths: 6
-      };
-      setCars([...cars, newCar]);
+    try {
+        if (editingCar) {
+            // EDIT MOBIL
+            const carRef = doc(db, 'cars', editingCar.id);
+            await updateDoc(carRef, {
+                ...carFormData,
+                currentKm: kmParsed,
+                capacity: capacityParsed
+            });
+        } else {
+            // TAMBAH MOBIL BARU
+            await addDoc(collection(db, 'cars'), {
+                ...carFormData,
+                currentKm: kmParsed,
+                capacity: capacityParsed,
+                lastOilChangeKm: kmParsed,
+                lastOilChangeDate: new Date().toISOString().split('T')[0],
+                lastOilBrand: '-',
+                oilChangeLimitKm: 5000,
+                oilChangeLimitMonths: 6,
+                createdAt: new Date().toISOString()
+            });
+        }
+        setShowCarModal(false);
+    } catch (e) {
+        console.error("Error saving car: ", e);
+        alert("Gagal menyimpan data mobil.");
     }
-    setShowCarModal(false);
   };
 
   const openDetailModal = (req) => {
     setActiveRequest(req);
     setShowDetailModal(true);
   };
+
+  if (isLoading) {
+      return (
+          <div className="min-h-screen flex items-center justify-center bg-gray-50">
+              <div className="text-indigo-600 font-semibold flex items-center gap-2">
+                 <svg className="animate-spin h-5 w-5 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                 Memuat Data Yayasan...
+              </div>
+          </div>
+      )
+  }
 
   if (!role) {
     return (
@@ -344,6 +432,7 @@ export default function App() {
           )}
         </div>
 
+        {}
         {role === 'admin' && activeTab === 'maintenance' && (
           <div className="space-y-6">
             <div className="flex justify-between items-center">
@@ -353,6 +442,13 @@ export default function App() {
               </button>
             </div>
             
+            {cars.length === 0 && (
+                <div className="bg-white p-8 text-center rounded-xl shadow-sm border border-gray-200">
+                    <p className="text-gray-500 mb-4">Belum ada mobil yang terdaftar di database.</p>
+                    <button onClick={openAddCarModal} className="bg-indigo-100 text-indigo-700 px-4 py-2 rounded-lg font-medium hover:bg-indigo-200">Tambah Mobil Pertama</button>
+                </div>
+            )}
+
             <div className="grid grid-cols-1 gap-6">
               {cars.map(car => {
                 const maintStatus = checkMaintenanceStatus(car);
@@ -375,7 +471,7 @@ export default function App() {
                       </div>
                       <div className="text-left md:text-right w-full md:w-auto mt-2 md:mt-0 bg-gray-50 md:bg-transparent p-3 md:p-0 rounded-lg border md:border-0 border-gray-100">
                         <p className="text-sm text-gray-500">Kilometer Saat Ini</p>
-                        <p className="text-2xl font-bold text-indigo-700">{car.currentKm.toLocaleString('id-ID')} KM</p>
+                        <p className="text-2xl font-bold text-indigo-700">{car.currentKm?.toLocaleString('id-ID') || 0} KM</p>
                       </div>
                     </div>
                     
@@ -384,8 +480,8 @@ export default function App() {
                          <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2"><WrenchIcon /> Jadwal Oli (Jarak)</h4>
                          <div className="space-y-2 text-sm">
                            <p className="flex justify-between"><span className="text-gray-600">Merk Oli:</span> <span className="font-medium text-right">{car.lastOilBrand || '-'}</span></p>
-                           <p className="flex justify-between"><span className="text-gray-600">Terakhir Ganti:</span> <span className="font-medium">{car.lastOilChangeKm.toLocaleString('id-ID')} KM</span></p>
-                           <p className="flex justify-between"><span className="text-gray-600">Batas Maksimal:</span> <span className="font-medium">{maintStatus.nextOilKm.toLocaleString('id-ID')} KM</span></p>
+                           <p className="flex justify-between"><span className="text-gray-600">Terakhir Ganti:</span> <span className="font-medium">{car.lastOilChangeKm?.toLocaleString('id-ID') || 0} KM</span></p>
+                           <p className="flex justify-between"><span className="text-gray-600">Batas Maksimal:</span> <span className="font-medium">{maintStatus.nextOilKm?.toLocaleString('id-ID') || 0} KM</span></p>
                          </div>
                          {maintStatus.isKmWarning && (
                            <div className="mt-4 flex items-start gap-2 text-red-700 text-sm font-medium p-3 bg-red-100 rounded-lg">
@@ -423,6 +519,7 @@ export default function App() {
           </div>
         )}
 
+        {}
         {role === 'admin' && activeTab === 'history' && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="p-6 border-b border-gray-100">
@@ -459,16 +556,24 @@ export default function App() {
                       </td>
                     </tr>
                   ))}
-                  {requests.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-gray-500">Belum ada data.</td></tr>}
+                  {requests.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-gray-500">Belum ada data peminjaman di database.</td></tr>}
                 </tbody>
               </table>
             </div>
           </div>
         )}
 
+        {}
         {role === 'user' && activeTab === 'available-cars' && (
            <div className="space-y-6">
             <h2 className="text-xl font-bold text-gray-800">Booking Kendaraan</h2>
+            
+            {cars.length === 0 && (
+                <div className="bg-white p-8 text-center rounded-xl shadow-sm border border-gray-200">
+                    <p className="text-gray-500">Belum ada mobil yang ditambahkan oleh Admin.</p>
+                </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {cars.map(car => (
                 <div key={car.id} className={`rounded-xl shadow-sm border p-5 flex flex-col bg-white ${car.status === 'Sedang Servis' || car.status === 'Tidak Aktif' ? 'border-red-200 opacity-75' : 'border-green-200'}`}>
@@ -483,7 +588,7 @@ export default function App() {
                   </div>
                   <div className="mb-6 space-y-2 text-sm text-gray-600">
                     <p>Kapasitas: <span className="font-medium text-gray-900">{car.capacity} Org</span></p>
-                    <p>Kilometer: <span className="font-medium text-gray-900">{car.currentKm.toLocaleString('id-ID')} KM</span></p>
+                    <p>Kilometer: <span className="font-medium text-gray-900">{car.currentKm?.toLocaleString('id-ID')} KM</span></p>
                   </div>
                   <button 
                     disabled={car.status === 'Sedang Servis' || car.status === 'Tidak Aktif'}
@@ -498,6 +603,7 @@ export default function App() {
          </div>
         )}
 
+        {}
         {role === 'user' && activeTab === 'global-history' && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="p-6 border-b border-gray-100">
@@ -526,13 +632,14 @@ export default function App() {
                       <td className="p-4"><Badge status={req.status} /></td>
                     </tr>
                   ))}
-                  {requests.length === 0 && <tr><td colSpan="4" className="p-8 text-center text-gray-500">Belum ada jadwal.</td></tr>}
+                  {requests.length === 0 && <tr><td colSpan="4" className="p-8 text-center text-gray-500">Belum ada jadwal tersimpan.</td></tr>}
                 </tbody>
               </table>
             </div>
           </div>
         )}
 
+        {}
         {role === 'user' && activeTab === 'my-requests' && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="p-6 border-b border-gray-100">
@@ -577,7 +684,8 @@ export default function App() {
         )}
       </main>
 
-      {/* --- SEMUA MODAL DI BAWAH SINI --- */}
+      {}
+      {/* --- SEMUA MODAL --- */}
       
       {showOilModal && selectedCar && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 overflow-y-auto">
@@ -615,7 +723,7 @@ export default function App() {
                    </div>
                 </div>
                 <div className="pt-4 border-t">
-                  <button type="submit" className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 shadow-sm">Simpan Data</button>
+                  <button type="submit" className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 shadow-sm">Simpan ke Database</button>
                 </div>
               </form>
            </div>
@@ -684,7 +792,7 @@ export default function App() {
               </div>
 
               <div className="pt-4 border-t">
-                <button type="submit" className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 shadow-lg">Submit Booking</button>
+                <button type="submit" className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 shadow-lg">Submit Booking (Database)</button>
               </div>
             </form>
           </div>
@@ -779,7 +887,7 @@ export default function App() {
                </div>
 
               <div className="pt-4 border-t">
-                <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 shadow-lg">Kirim Laporan</button>
+                <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 shadow-lg">Kirim Laporan (Database)</button>
               </div>
             </form>
           </div>
@@ -873,7 +981,7 @@ export default function App() {
                 </div>
                 <div className="pt-4 border-t mt-6">
                   <button type="submit" className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 shadow-sm">
-                    {editingCar ? 'Simpan' : 'Tambahkan'}
+                    {editingCar ? 'Simpan ke Database' : 'Tambahkan (Database)'}
                   </button>
                 </div>
               </form>
